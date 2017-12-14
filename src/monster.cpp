@@ -17,12 +17,13 @@
 #include <algorithm>
 #include <numeric>
 #include "cursesdef.h"
-#include "json.h"
+#include "effect.h"
 #include "messages.h"
 #include "mondefense.h"
 #include "mission.h"
 #include "mongroup.h"
 #include "monfaction.h"
+#include "string_formatter.h"
 #include "options.h"
 #include "trap.h"
 #include "line.h"
@@ -135,7 +136,7 @@ static const std::map<monster_attitude, std::pair<std::string, color_id>> attitu
     {monster_attitude::MATT_FPASSIVE, {translate_marker( "Passive." ), def_h_white}},
     {monster_attitude::MATT_FLEE, {translate_marker( "Fleeing!" ), def_c_green}},
     {monster_attitude::MATT_FOLLOW, {translate_marker( "Tracking." ), def_c_yellow}},
-    {monster_attitude::MATT_IGNORE, {translate_marker( "Ignoring." ), def_c_ltgray}},
+    {monster_attitude::MATT_IGNORE, {translate_marker( "Ignoring." ), def_c_light_gray}},
     {monster_attitude::MATT_ZLAVE, {translate_marker( "Zombie slave." ), def_c_green}},
     {monster_attitude::MATT_ATTACK, {translate_marker( "Hostile!" ), def_c_red}},
     {monster_attitude::MATT_NULL, {translate_marker( "BUG: Behavior unnamed." ), def_h_red}},
@@ -189,9 +190,11 @@ monster::monster( const mtype_id& id, const tripoint &p ) : monster(id)
     unset_dest();
 }
 
-monster::~monster()
-{
-}
+monster::monster( const monster & ) = default;
+monster::monster( monster && ) = default;
+monster::~monster() = default;
+monster &monster::operator=( const monster & ) = default;
+monster &monster::operator=( monster && ) = default;
 
 void monster::setpos( const tripoint &p )
 {
@@ -394,7 +397,7 @@ std::pair<std::string, nc_color> hp_description( int cur_hp, int max_hp )
         col = c_green;
     } else if( cur_hp >= max_hp * 0.8 ) {
         damage_info = _("It is lightly injured.");
-        col = c_ltgreen;
+        col = c_light_green;
     } else if( cur_hp >= max_hp * 0.6 ) {
         damage_info = _("It is moderately injured.");
         col = c_yellow;
@@ -403,7 +406,7 @@ std::pair<std::string, nc_color> hp_description( int cur_hp, int max_hp )
         col = c_yellow;
     } else if( cur_hp >= max_hp * 0.1 ) {
         damage_info = _("It is severely injured.");
-        col = c_ltred;
+        col = c_light_red;
     } else {
         damage_info = _("it is nearly dead!");
         col = c_red;
@@ -605,7 +608,7 @@ bool monster::digging() const
 bool monster::can_act() const
 {
     return moves > 0 &&
-        ( effects.empty() ||
+        ( effects->empty() ||
           ( !has_effect( effect_stunned ) && !has_effect( effect_downed ) && !has_effect( effect_webbed ) ) );
 }
 
@@ -632,18 +635,6 @@ bool monster::made_of( const material_id &m ) const
 bool monster::made_of(phase_id p) const
 {
     return type->phase == p;
-}
-
-void monster::load_info(std::string data)
-{
-    std::stringstream dump;
-    dump << data;
-    JsonIn jsin(dump);
-    try {
-        deserialize(jsin);
-    } catch( const JsonError &jsonerr ) {
-        debugmsg("monster:load_info: Bad monster json\n%s", jsonerr.c_str() );
-    }
 }
 
 void monster::shift(int sx, int sy)
@@ -1388,16 +1379,6 @@ bool monster::move_effects(bool)
     return true;
 }
 
-void monster::add_eff_effects(effect e, bool reduced)
-{
-    int val = e.get_amount("HURT", reduced);
-    if (val > 0) {
-        if(e.activated(calendar::turn, "HURT", val, reduced)) {
-            apply_damage(nullptr, bp_torso, val);
-        }
-    }
-    Creature::add_eff_effects(e, reduced);
-}
 void monster::add_effect( const efftype_id &eff_id, int dur, body_part bp,
                           bool permanent, int intensity, bool force )
 {
@@ -1408,7 +1389,7 @@ void monster::add_effect( const efftype_id &eff_id, int dur, body_part bp,
 std::string monster::get_effect_status() const
 {
     std::vector<std::string> effect_status;
-    for( auto &elem : effects ) {
+    for( auto &elem : *effects ) {
         for( auto &_it : elem.second ) {
             if( elem.first->is_show_in_info() ) {
                 effect_status.push_back( _it.second.disp_name() );
@@ -1773,8 +1754,7 @@ void monster::die(Creature* nkiller)
 
     if (anger_adjust != 0 || morale_adjust != 0) {
         int light = g->light_level( posz() );
-        for (size_t i = 0; i < g->num_zombies(); i++) {
-            monster &critter = g->zombie( i );
+        for( monster &critter : g->all_monsters() ) {
             if( !critter.type->same_species( *type ) ) {
                 continue;
             }
@@ -1806,46 +1786,55 @@ void monster::drop_items_on_death()
     }
 }
 
+void monster::process_one_effect( effect &it, bool is_new )
+{
+    // Monsters don't get trait-based reduction, but they do get effect based reduction
+    bool reduced = resists_effect(it);
+    const auto get_effect = [&it, is_new]( const std::string &arg, bool reduced ) {
+        if( is_new ) {
+            return it.get_amount( arg, reduced );
+        }
+        return it.get_mod( arg, reduced );
+    };
+
+    mod_speed_bonus(get_effect("SPEED", reduced));
+
+    int val = get_effect("HURT", reduced);
+    if (val > 0) {
+        if( is_new || it.activated( calendar::turn, "HURT", val, reduced, 1 ) ) {
+            apply_damage( nullptr, bp_torso, val );
+        }
+    }
+
+    const efftype_id &id = it.get_id();
+    // MATERIALS-TODO: use fire resistance
+    if( it.impairs_movement() ) {
+        effect_cache[MOVEMENT_IMPAIRED] = true;
+    } else if( id == effect_onfire ) {
+        int dam = 0;
+        if( made_of( material_id( "veggy" ) ) ) {
+            dam = rng( 10, 20 );
+        } else if( made_of( material_id( "flesh" ) ) || made_of( material_id( "iflesh" ) ) ) {
+            dam = rng( 5, 10 );
+        }
+
+        dam -= get_armor_type( DT_HEAT, bp_torso );
+        if( dam > 0 ) {
+            apply_damage( nullptr, bp_torso, dam );
+        } else {
+            it.set_duration( 0 );
+        }
+    } else if( id == effect_run ) {
+        effect_cache[FLEEING] = true;
+    }
+}
+
 void monster::process_effects()
 {
     // Monster only effects
-    int mod = 1;
-    for( auto &elem : effects ) {
+    for( auto &elem : *effects ) {
         for( auto &_effect_it : elem.second ) {
-            auto &it = _effect_it.second;
-            // Monsters don't get trait-based reduction, but they do get effect based reduction
-            bool reduced = resists_effect(it);
-
-            mod_speed_bonus(it.get_mod("SPEED", reduced));
-
-            int val = it.get_mod("HURT", reduced);
-            if (val > 0) {
-                if(it.activated(calendar::turn, "HURT", val, reduced, mod)) {
-                    apply_damage(nullptr, bp_torso, val);
-                }
-            }
-
-            const efftype_id &id = _effect_it.second.get_id();
-            // MATERIALS-TODO: use fire resistance
-            if( it.impairs_movement() ) {
-                effect_cache[MOVEMENT_IMPAIRED] = true;
-            } else if( id == effect_onfire ) {
-                int dam = 0;
-                if( made_of( material_id( "veggy" ) ) ) {
-                    dam = rng( 10, 20 );
-                } else if( made_of( material_id( "flesh" ) ) || made_of( material_id( "iflesh" ) ) ) {
-                    dam = rng( 5, 10 );
-                }
-
-                dam -= get_armor_type( DT_HEAT, bp_torso );
-                if( dam > 0 ) {
-                    apply_damage( nullptr, bp_torso, dam );
-                } else {
-                    it.set_duration( 0 );
-                }
-            } else if( id == effect_run ) {
-                effect_cache[FLEEING] = true;
-            }
+            process_one_effect( _effect_it.second, false );
         }
     }
 
@@ -2011,52 +2000,32 @@ m_size monster::get_size() const {
 }
 
 
-void monster::add_msg_if_npc(const char *msg, ...) const
+void monster::add_msg_if_npc( const std::string &msg ) const
 {
-    va_list ap;
-    va_start(ap, msg);
     if (g->u.sees(*this)) {
-        std::string processed_npc_string = vstring_format(msg, ap);
-        processed_npc_string = replace_with_npc_name(processed_npc_string, disp_name());
-        add_msg(processed_npc_string.c_str());
+        add_msg( replace_with_npc_name( msg, disp_name() ) );
     }
-    va_end(ap);
 }
 
-void monster::add_msg_player_or_npc(const char *, const char* npc_str, ...) const
+void monster::add_msg_player_or_npc( const std::string &/*player_msg*/, const std::string &npc_msg ) const
 {
-    va_list ap;
-    va_start(ap, npc_str);
     if (g->u.sees(*this)) {
-        std::string processed_npc_string = vstring_format(npc_str, ap);
-        processed_npc_string = replace_with_npc_name(processed_npc_string, disp_name());
-        add_msg(processed_npc_string.c_str());
+        add_msg( replace_with_npc_name( npc_msg, disp_name() ) );
     }
-    va_end(ap);
 }
 
-void monster::add_msg_if_npc(game_message_type type, const char *msg, ...) const
+void monster::add_msg_if_npc( const game_message_type type, const std::string &msg ) const
 {
-    va_list ap;
-    va_start(ap, msg);
     if (g->u.sees(*this)) {
-        std::string processed_npc_string = vstring_format(msg, ap);
-        processed_npc_string = replace_with_npc_name(processed_npc_string, disp_name());
-        add_msg(type, processed_npc_string.c_str());
+        add_msg( type, replace_with_npc_name( msg, disp_name() ) );
     }
-    va_end(ap);
 }
 
-void monster::add_msg_player_or_npc(game_message_type type, const char *, const char* npc_str, ...) const
+void monster::add_msg_player_or_npc( const game_message_type type, const std::string &/*player_msg*/, const std::string &npc_msg ) const
 {
-    va_list ap;
-    va_start(ap, npc_str);
     if (g->u.sees(*this)) {
-        std::string processed_npc_string = vstring_format(npc_str, ap);
-        processed_npc_string = replace_with_npc_name(processed_npc_string, disp_name());
-        add_msg(type, processed_npc_string.c_str());
+        add_msg( type, replace_with_npc_name( npc_msg, disp_name() ) );
     }
-    va_end(ap);
 }
 
 bool monster::is_dead() const
@@ -2154,8 +2123,7 @@ void monster::on_hit( Creature *source, body_part,
 
     if( anger_adjust != 0 || morale_adjust != 0 ) {
         int light = g->light_level( posz() );
-        for( size_t i = 0; i < g->num_zombies(); i++ ) {
-            monster &critter = g->zombie( i );
+        for( monster &critter : g->all_monsters() ) {
             if( !critter.type->same_species( *type ) ) {
                 continue;
             }
@@ -2189,6 +2157,16 @@ int monster::get_hp_max( hp_part ) const
 int monster::get_hp_max() const
 {
     return type->hp;
+}
+
+int monster::get_hp( hp_part ) const
+{
+    return hp;
+}
+
+int monster::get_hp() const
+{
+    return hp;
 }
 
 void monster::hear_sound( const tripoint &source, const int vol, const int dist )

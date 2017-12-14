@@ -29,7 +29,7 @@ void main_menu::on_move() const
 void main_menu::print_menu_items( WINDOW *w_in, std::vector<std::string> vItems, size_t iSel,
                                   int iOffsetY, int iOffsetX, int spacing )
 {
-    mvwprintz( w_in, iOffsetY, iOffsetX, c_black, "" );
+    wmove( w_in, iOffsetY, iOffsetX );
     for( size_t i = 0; i < vItems.size(); ++i ) {
         nc_color text_color;
         nc_color key_color;
@@ -37,15 +37,15 @@ void main_menu::print_menu_items( WINDOW *w_in, std::vector<std::string> vItems,
             text_color = h_white;
             key_color = h_white;
         } else {
-            text_color = c_ltgray;
+            text_color = c_light_gray;
             key_color = c_white;
         }
-        wprintz( w_in, c_ltgray, "[" );
+        wprintz( w_in, c_light_gray, "[" );
         shortcut_print( w_in, text_color, key_color, vItems[i] );
-        wprintz( w_in, c_ltgray, "]" );
+        wprintz( w_in, c_light_gray, "]" );
         // Don't print spaces after last item.
         if( i != ( vItems.size() - 1 ) ) {
-            wprintz( w_in, c_ltgray, std::string( spacing, ' ' ).c_str() );
+            wprintz( w_in, c_light_gray, std::string( spacing, ' ' ).c_str() );
         }
     }
 }
@@ -71,9 +71,9 @@ void main_menu::print_menu( WINDOW *w_open, int iSel, const int iMenuOffsetX, in
     int iLine = 0;
     const int iOffsetX = ( window_width - FULL_SCREEN_WIDTH ) / 2;
 
-    const nc_color cColor1 = c_ltcyan;
-    const nc_color cColor2 = c_ltblue;
-    const nc_color cColor3 = c_ltblue;
+    const nc_color cColor1 = c_light_cyan;
+    const nc_color cColor2 = c_light_blue;
+    const nc_color cColor3 = c_light_blue;
 
     if( mmenu_title.size() > 1 ) {
         for( size_t i = 0; i < mmenu_title.size(); ++i ) {
@@ -88,12 +88,12 @@ void main_menu::print_menu( WINDOW *w_open, int iSel, const int iMenuOffsetX, in
             mvwprintz( w_open, iLine++, iOffsetX, i < 6 ? cColor1 : cColor2, mmenu_title[i].c_str() );
         }
     } else {
-        center_print( w_open, iLine++, cColor1, mmenu_title[0].c_str() );
+        center_print( w_open, iLine++, cColor1, mmenu_title[0] );
     }
 
     if( bShowDDA ) {
         iLine++;
-        center_print( w_open, iLine++, cColor3, _( "Version: %s" ), getVersionString() );
+        center_print( w_open, iLine++, cColor3, string_format( _( "Version: %s" ), getVersionString() ) );
     }
 
     int menu_length = 0;
@@ -337,7 +337,7 @@ bool main_menu::opening_screen()
                 const int motdy = ( iMenuOffsetY - mmenu_motd.size() ) * 2 / 3;
                 const int motdx = 8 + extra_w / 2;
                 for( size_t i = 0; i < mmenu_motd.size(); i++ ) {
-                    mvwprintz( w_open, motdy + i, motdx, c_ltred, mmenu_motd[i].c_str() );
+                    mvwprintz( w_open, motdy + i, motdx, c_light_red, mmenu_motd[i].c_str() );
                 }
 
                 wrefresh( w_open );
@@ -618,6 +618,8 @@ bool main_menu::new_character_tab()
                     }
                     if( !g->u.create( sel2 == 0 ? PLTYPE_CUSTOM : ( sel2 == 2 ? PLTYPE_RANDOM : PLTYPE_NOW ) ) ) {
                         g->u = player();
+                        werase( w_background );
+                        wrefresh( w_background );
                         continue;
                     }
 
@@ -701,6 +703,8 @@ bool main_menu::new_character_tab()
                 }
                 if( !g->u.create( PLTYPE_TEMPLATE, templates[sel3] ) ) {
                     g->u = player();
+                    werase( w_background );
+                    wrefresh( w_background );
                     continue;
                 }
                 werase( w_background );
@@ -734,12 +738,12 @@ bool main_menu::load_character_tab()
                     int savegames_count = world_generator->get_world( world_name )->world_saves.size();
                     nc_color color1, color2;
                     if( world_name == "TUTORIAL" || world_name == "DEFENSE" ) {
-                        color1 = c_ltcyan;
-                        color2 = h_ltcyan;
+                        color1 = c_light_cyan;
+                        color2 = h_light_cyan;
                     } else {
                         if( world_generator->world_need_lua_build( world_name ) ) {
-                            color1 = c_dkgray;
-                            color2 = h_dkgray;
+                            color1 = c_dark_gray;
+                            color2 = h_dark_gray;
                         } else {
                             color1 = c_white;
                             color2 = h_white;
@@ -875,13 +879,13 @@ void main_menu::world_tab()
                     text_color = h_white;
                     key_color = h_white;
                 } else {
-                    text_color = c_ltgray;
+                    text_color = c_light_gray;
                     key_color = c_white;
                 }
-                mvwprintz( w_open, yoffset - i, xoffset, c_black, "" );
-                wprintz( w_open, c_ltgray, "[" );
+                wmove( w_open, yoffset - i, xoffset );
+                wprintz( w_open, c_light_gray, "[" );
                 shortcut_print( w_open, text_color, key_color, vWorldSubItems[i] );
-                wprintz( w_open, c_ltgray, "]" );
+                wprintz( w_open, c_light_gray, "]" );
             }
 
             wrefresh( w_open );
@@ -967,8 +971,8 @@ void main_menu::world_tab()
                 int line = iMenuOffsetY - 2 - i;
                 nc_color color1, color2;
                 if( *it == "TUTORIAL" || *it == "DEFENSE" ) {
-                    color1 = c_ltcyan;
-                    color2 = h_ltcyan;
+                    color1 = c_light_cyan;
+                    color2 = h_light_cyan;
                 } else {
                     color1 = c_white;
                     color2 = h_white;

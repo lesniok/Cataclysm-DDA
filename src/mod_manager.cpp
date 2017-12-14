@@ -2,6 +2,9 @@
 #include "filesystem.h"
 #include "debug.h"
 #include "output.h"
+#include "json.h"
+#include "generic_factory.h"
+#include "string_formatter.h"
 #include "worldfactory.h"
 #include "cata_utility.h"
 #include "path_info.h"
@@ -12,9 +15,6 @@
 #include <iostream>
 #include <fstream>
 #include <unordered_set>
-
-#include "json.h"
-#include "generic_factory.h"
 
 #define MOD_SEARCH_FILE "modinfo.json"
 

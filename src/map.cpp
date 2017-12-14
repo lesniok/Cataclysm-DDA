@@ -8,16 +8,17 @@
 #include "game.h"
 #include "fungal_effects.h"
 #include "line.h"
-#include "options.h"
 #include "item_factory.h"
 #include "projectile.h"
 #include "mapbuffer.h"
 #include "translations.h"
+#include "iexamine.h"
+#include "string_formatter.h"
 #include "sounds.h"
 #include "debug.h"
 #include "trap.h"
+#include "item.h"
 #include "messages.h"
-#include "mapsharing.h"
 #include "ammo.h"
 #include "iuse_actor.h"
 #include "mongroup.h"
@@ -27,7 +28,6 @@
 #include "vehicle.h"
 #include "veh_type.h"
 #include "artifact.h"
-#include "omdata.h"
 #include "submap.h"
 #include "map_iterator.h"
 #include "mapdata.h"
@@ -36,10 +36,8 @@
 #include "item_group.h"
 #include "pathfinding.h"
 #include "scent_map.h"
-#include "cata_utility.h"
 #include "harvest.h"
 #include "input.h"
-#include "computer.h"
 
 #include <cmath>
 #include <stdlib.h>
@@ -1178,18 +1176,6 @@ const vehicle* map::veh_at( const tripoint &p ) const
     return veh_at( p, part );
 }
 
-point map::veh_part_coordinates( const tripoint &p )
-{
-    int part_num = 0;
-    vehicle* veh = veh_at( p, part_num );
-
-    if(veh == nullptr) {
-        return point( 0,0 );
-    }
-
-    return veh->parts[part_num].mount;
-}
-
 void map::board_vehicle( const tripoint &pos, player *p )
 {
     if( p == nullptr ) {
@@ -1562,7 +1548,7 @@ void map::furn_set( const tripoint &p, const furn_id new_furniture )
 
     // If player has grabbed this furniture and it's no longer grabbable, release the grab.
     if( g->u.grab_type == OBJECT_FURNITURE && g->u.grab_point == p && new_t.move_str_req < 0 ) {
-        add_msg( _( "The %s you were grabbing is destroyed!" ), old_t.name.c_str() );
+        add_msg( _( "The %s you were grabbing is destroyed!" ), old_t.name().c_str() );
         g->u.grab_type = OBJECT_NONE;
         g->u.grab_point = tripoint_zero;
     }
@@ -1611,9 +1597,9 @@ std::string map::furnname( const tripoint &p ) {
     if( f.has_flag( "PLANT" ) && !i_at( p ).empty() ) {
         const item &seed = i_at( p ).front();
         const std::string &plant = seed.get_plant_name();
-        return string_format( "%s (%s)", f.name.c_str(), plant.c_str() );
+        return string_format( "%s (%s)", f.name().c_str(), plant.c_str() );
     } else {
-        return f.name;
+        return f.name();
     }
 }
 
@@ -1793,7 +1779,7 @@ void map::ter_set( const tripoint &p, const ter_id new_terrain )
 
 std::string map::tername( const tripoint &p ) const
 {
-    return ter( p ).obj().name;
+    return ter( p ).obj().name();
 }
 
 std::string map::features(const int x, const int y)
@@ -2275,7 +2261,7 @@ void map::drop_furniture( const tripoint &p )
         tripoint below( current.x, current.y, current.z - 1 );
         bash( below, dmg, false, false, false );
     } else if( last_state == SS_CREATURE ) {
-        const std::string &furn_name = frn_obj.name;
+        const std::string &furn_name = frn_obj.name();
         bash( current, dmg, false, false, false );
         tripoint below( current.x, current.y, current.z - 1 );
         Creature *critter = g->critter_at( below );
@@ -2355,8 +2341,7 @@ void map::drop_fields( const tripoint &p )
         return;
     }
 
-    // Ugly two-pass for now - field access is weird
-    bool dropped = false;
+    std::list<field_id> dropped;
     const tripoint below = p - tripoint( 0, 0, 1 );
     for( const auto &iter : fld ) {
         const field_entry &entry = iter.second;
@@ -2364,19 +2349,12 @@ void map::drop_fields( const tripoint &p )
         // Active fields "drop themselves"
         if( entry.decays_on_actualize() ) {
             add_field( below, entry.getFieldType(), entry.getFieldDensity(), entry.getFieldAge() );
-            dropped = true;
+            dropped.push_back( entry.getFieldType() );
         }
     }
 
-    // Now remove the dropped fields (that's the ugly part)
-    while( dropped ) {
-        dropped = false;
-        for( auto iter = fld.begin(); !dropped && iter != fld.end(); ) {
-            if( iter->second.decays_on_actualize() ) {
-                dropped = fld.removeField( iter->second.getFieldType() );
-                break;
-            }
-        }
+    for( const auto &entry : dropped ) {
+        fld.removeField( entry );
     }
 }
 
@@ -3411,8 +3389,7 @@ void map::bash_ter_furn( const tripoint &p, bash_params &params )
     if( tent ) {
         // Get ids of possible centers
         std::set<furn_id> centers;
-        for( const auto &center : bash->tent_centers ) {
-            const furn_str_id cur_id( center );
+        for( const auto &cur_id : bash->tent_centers ) {
             if( cur_id.is_valid() ) {
                 centers.insert( cur_id );
             }
@@ -3452,8 +3429,7 @@ void map::bash_ter_furn( const tripoint &p, bash_params &params )
 
                 const auto recur_bash = &frn.obj().bash;
                 // Check if we share a center type and thus a "tent type"
-                for( const auto &center : recur_bash->tent_centers ) {
-                    const furn_str_id cur_id( center );
+                for( const auto &cur_id : recur_bash->tent_centers ) {
                     if( centers.count( cur_id.id() ) > 0 ) {
                         // Found same center, wreck current tile
                         spawn_items( p, item_group::items_from( recur_bash->drop_group, calendar::turn ) );
@@ -3674,9 +3650,7 @@ void map::crush( const tripoint &p )
         }
     }
 
-    int mon = g->mon_at( p );
-    if( mon != -1 ) {
-        monster* monhit = &(g->zombie(mon));
+    if( monster *const monhit = g->critter_at<monster>( p ) ) {
         // 25 ~= 60 * .45 (torso)
         monhit->deal_damage(nullptr, bp_torso, damage_instance(DT_BASH, rng(0,25)));
 
@@ -4032,8 +4006,8 @@ void map::translate(const ter_id from, const ter_id to)
 {
     if (from == to) {
         debugmsg( "map::translate %s => %s",
-                  from.obj().name.c_str(),
-                  from.obj().name.c_str() );
+                  from.obj().name().c_str(),
+                  from.obj().name().c_str() );
         return;
         }
 
@@ -4054,8 +4028,8 @@ void map::translate_radius(const ter_id from, const ter_id to, float radi, const
 {
     if( from == to ) {
         debugmsg( "map::translate %s => %s",
-                  from.obj().name.c_str(),
-                  from.obj().name.c_str() );
+                  from.obj().name().c_str(),
+                  from.obj().name().c_str() );
         return;
     }
 
@@ -4981,14 +4955,21 @@ void use_charges_from_furn( const furn_t &f, const itype_id &type, long &quantit
 
         // If the toilet is not empty
         if( water != items.end() ) {
-            long remaining_charges = water->charges;
-            water->charges -= quantity;
-            if( water->charges > 0 ) {
-                ret.push_back( *water );
+            // There is water, copy it to report back to the outer method
+            ret.push_back( *water );
+            if( water->charges - quantity > 0 ) {
+                // Update the returned water amount to match the requested amount
+                ret.back().charges = quantity;
+                // Update the water item in the world to contain the leftover water
+                water->charges -= quantity;
+                // All the water needed was found, no other sources will be needed
                 quantity = 0;
             } else {
+                // The water copy in ret already contains how much was available
+                // The leftover quantity returned will check other sources
+                quantity -= water->charges;
+                // Remove water item from the world
                 items.erase( water );
-                quantity -= remaining_charges;
             }
         }
 
@@ -5258,11 +5239,6 @@ item *map::item_from( vehicle *veh, int cargo_part, size_t index ) {
     }
 }
 
-void map::trap_set( const tripoint &p, const trap_id id)
-{
-    add_trap( p, id );
-}
-
 const trap &map::tr_at( const tripoint &p ) const
 {
     if( !inbounds( p.x, p.y, p.z ) ) {
@@ -5279,7 +5255,7 @@ const trap &map::tr_at( const tripoint &p ) const
     return current_submap->get_trap( lx, ly ).obj();
 }
 
-void map::add_trap( const tripoint &p, const trap_id t)
+void map::trap_set( const tripoint &p, const trap_id t)
 {
     if( !inbounds( p ) )
     {
@@ -5291,7 +5267,7 @@ void map::add_trap( const tripoint &p, const trap_id t)
     const ter_t &ter = current_submap->get_ter( lx, ly ).obj();
     if( ter.trap != tr_null ) {
         debugmsg( "set trap %s on top of terrain %s which already has a builit-in trap",
-                  t.obj().name().c_str(), ter.name.c_str() );
+                  t.obj().name().c_str(), ter.name().c_str() );
         return;
     }
 
@@ -5653,22 +5629,6 @@ void map::add_camp( const tripoint &p, const std::string& name )
     get_submap_at( p )->camp = basecamp( name, p.x, p.y );
 }
 
-void map::debug()
-{
- mvprintw(0, 0, "MAP DEBUG");
- inp_mngr.wait_for_any_key();
- for (int i = 0; i <= SEEX * 2; i++) {
-  for (int j = 0; j <= SEEY * 2; j++) {
-   if (i_at(i, j).size() > 0) {
-    mvprintw(1, 0, "%d, %d: %d items", i, j, i_at(i, j).size());
-    mvprintw(2, 0, "%s, %d", i_at(i, j)[0].symbol().c_str(), i_at(i, j)[0].color());
-    inp_mngr.wait_for_any_key();
-   }
-  }
- }
- inp_mngr.wait_for_any_key();
-}
-
 void map::update_visibility_cache( const int zlev ) {
     visibility_variables_cache.variables_set = true; // Not used yet
     visibility_variables_cache.g_light_level = (int)g->light_level( zlev );
@@ -5797,7 +5757,7 @@ bool map::apply_vision_effects( WINDOW *w, lit_level ll,
             return false;
         case VIS_LIT: // can only tell that this square is bright
             symbol = '#';
-            color = c_ltgray;
+            color = c_light_gray;
             break;
         case VIS_BOOMER:
             symbol = '#';
@@ -6062,11 +6022,11 @@ bool map::draw_maptile( WINDOW* w, player &u, const tripoint &p, const maptile &
     if( u_vision[BOOMERED] ) {
         tercol = c_magenta;
     } else if( u_vision[NV_GOGGLES] ) {
-        tercol = (bright_light) ? c_white : c_ltgreen;
+        tercol = (bright_light) ? c_white : c_light_green;
     } else if( low_light ) {
-        tercol = c_dkgray;
+        tercol = c_dark_gray;
     } else if( u_vision[DARKNESS] ) {
-        tercol = c_dkgray;
+        tercol = c_dark_gray;
     }
 
     if( invert ) {
@@ -6106,7 +6066,7 @@ void map::draw_from_above( WINDOW* w, player &u, const tripoint &p,
 {
     static const long AUTO_WALL_PLACEHOLDER = 2; // this should never appear as a real symbol!
 
-    nc_color tercol = c_dkgray;
+    nc_color tercol = c_dark_gray;
     long sym = ' ';
 
     const ter_t &curr_ter = curr_tile.get_ter_t();
@@ -6123,7 +6083,7 @@ void map::draw_from_above( WINDOW* w, player &u, const tripoint &p,
         const int roof = veh->roof_at_part( part_below );
         const int displayed_part = roof >= 0 ? roof : part_below;
         sym = special_symbol( veh->face.dir_symbol( veh->part_sym( displayed_part, true ) ) );
-        tercol = (roof >= 0 || veh->obstacle_at_part( part_below ) ) ? c_ltgray : c_ltgray_cyan;
+        tercol = (roof >= 0 || veh->obstacle_at_part( part_below ) ) ? c_light_gray : c_light_gray_cyan;
     } else if( curr_ter.has_flag( TFLAG_SEEN_FROM_ABOVE ) ) {
         if( curr_ter.has_flag( TFLAG_AUTO_WALL_SYMBOL ) ) {
             sym = AUTO_WALL_PLACEHOLDER;
@@ -6157,11 +6117,11 @@ void map::draw_from_above( WINDOW* w, player &u, const tripoint &p,
     if( u_vision[BOOMERED] ) {
         tercol = c_magenta;
     } else if( u_vision[NV_GOGGLES] ) {
-        tercol = (bright_light) ? c_white : c_ltgreen;
+        tercol = (bright_light) ? c_white : c_light_green;
     } else if( low_light ) {
-        tercol = c_dkgray;
+        tercol = c_dark_gray;
     } else if( u_vision[DARKNESS] ) {
-        tercol = c_dkgray;
+        tercol = c_dark_gray;
     }
 
     if( invert ) {
@@ -6853,11 +6813,11 @@ void map::grow_plant( const tripoint &p )
     }
     const int plantEpoch = seed.get_plant_epoch();
 
-    if ( calendar::turn >= seed.bday + plantEpoch ) {
-        if (calendar::turn < seed.bday + plantEpoch * 2 ) {
+    if( seed.age() >= plantEpoch ) {
+        if( seed.age() < plantEpoch * 2 ) {
                 i_rem(p, 1);
                 furn_set(p, furn_str_id( "f_plant_seedling" ) );
-        } else if (calendar::turn < seed.bday + plantEpoch * 3 ) {
+        } else if( seed.age() < plantEpoch * 3 ) {
                 i_rem(p, 1);
                 furn_set(p, furn_str_id( "f_plant_mature" ) );
         } else {
@@ -7091,9 +7051,9 @@ void map::actualize( const int gridx, const int gridy, const int gridz )
     }
 
     //Check for Merchants to restock
-    for( auto & i : g->active_npc ) {
-        if( i->restock > 0 && calendar::turn > i->restock ) {
-            i->shop_restock();
+    for( npc &guy : g->all_npcs() ) {
+        if( guy.restock > 0 && calendar::turn > guy.restock ) {
+            guy.shop_restock();
         }
     }
 
@@ -7861,7 +7821,7 @@ void map::draw_fill_background( ter_id( *f )() )
 {
     draw_square_ter( f, 0, 0, SEEX * my_MAPSIZE - 1, SEEY * my_MAPSIZE - 1 );
 }
-void map::draw_fill_background( const id_or_id<ter_t> &f )
+void map::draw_fill_background( const weighted_int_list<ter_id> &f )
 {
     draw_square_ter( f, 0, 0, SEEX * my_MAPSIZE - 1, SEEY * my_MAPSIZE - 1 );
 }
@@ -7887,10 +7847,11 @@ void map::draw_square_ter( ter_id( *f )(), int x1, int y1, int x2, int y2 )
     }, x1, y1, x2, y2 );
 }
 
-void map::draw_square_ter( const id_or_id<ter_t> &f, int x1, int y1, int x2, int y2 )
+void map::draw_square_ter( const weighted_int_list<ter_id> &f, int x1, int y1, int x2, int y2 )
 {
     draw_square( [this, f]( int x, int y ) {
-        this->ter_set( x, y, f.get() );
+        const ter_id *tid = f.pick();
+        this->ter_set( x, y, tid != nullptr ? *tid : t_null );
     }, x1, y1, x2, y2 );
 }
 
@@ -8231,6 +8192,9 @@ void map::update_pathfinding_cache( int zlev ) const
                         cur_value |= PF_SLOW;
                     } else if( cost <= 0 ) {
                         cur_value |= PF_WALL;
+                        if( terrain.has_flag( TFLAG_CLIMBABLE ) ) {
+                            cur_value |= PF_CLIMBABLE;
+                        }
                     }
 
                     if( veh != nullptr ) {

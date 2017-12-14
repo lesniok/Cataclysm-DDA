@@ -4,6 +4,7 @@
 #include "item_factory.h"
 #include "debug.h"
 #include "json.h"
+#include "string_formatter.h"
 #include "cata_utility.h"
 #include "rng.h"
 #include "translations.h"
@@ -401,12 +402,12 @@ static const std::array<artifact_tool_form_datum, NUM_ARTTOOLFORMS> artifact_too
     },
 
     {
-        translate_marker( "Sword" ), '/', def_c_ltblue, material_id( "steel" ), 2000_ml, 3500_ml, 900_gram, 3259_gram, ARTWEAP_SWORD,
+        translate_marker( "Sword" ), '/', def_c_light_blue, material_id( "steel" ), 2000_ml, 3500_ml, 900_gram, 3259_gram, ARTWEAP_SWORD,
         {{ARTWEAP_BULK, ARTWEAP_NULL, ARTWEAP_NULL}}
     },
 
     {
-        translate_marker( "Dagger" ), ';', def_c_ltblue, material_id( "steel" ), 250_ml, 1000_ml, 100_gram, 700_gram, ARTWEAP_KNIFE,
+        translate_marker( "Dagger" ), ';', def_c_light_blue, material_id( "steel" ), 250_ml, 1000_ml, 100_gram, 700_gram, ARTWEAP_KNIFE,
         {{ARTWEAP_NULL, ARTWEAP_NULL, ARTWEAP_NULL}}
     },
 
@@ -460,7 +461,7 @@ static const std::array<artifact_armor_form_datum, NUM_ARTARMFORMS> artifact_arm
 
     // Name    color  Materials             Vol  Wgt Enc Cov Thk Env Wrm Sto Bsh Cut Hit
     {
-        translate_marker( "Helm" ),   def_c_dkgray, material_id( "silver" ),    1500_ml, 700_gram,  2,  85, 3,  0,  1,  0_ml,  8,  0, -2,
+        translate_marker( "Helm" ),   def_c_dark_gray, material_id( "silver" ),    1500_ml, 700_gram,  2,  85, 3,  0,  1,  0_ml,  8,  0, -2,
         mfb(bp_head), false,
         {{
             ARMORMOD_BULKY, ARMORMOD_FURRED, ARMORMOD_PADDED, ARMORMOD_PLATED,
@@ -469,7 +470,7 @@ static const std::array<artifact_armor_form_datum, NUM_ARTARMFORMS> artifact_arm
     },
 
     {
-        translate_marker( "Gloves" ), def_c_ltblue, material_id( "leather" ), 500_ml, 100_gram,  1,  90,  3,  1,  2,  0_ml, -4,  0, -2,
+        translate_marker( "Gloves" ), def_c_light_blue, material_id( "leather" ), 500_ml, 100_gram,  1,  90,  3,  1,  2,  0_ml, -4,  0, -2,
         mfb(bp_hand_l) | mfb(bp_hand_r), true,
         {{
             ARMORMOD_BULKY, ARMORMOD_FURRED, ARMORMOD_PADDED, ARMORMOD_PLATED,
@@ -488,7 +489,7 @@ static const std::array<artifact_armor_form_datum, NUM_ARTARMFORMS> artifact_arm
     },
 
     {
-        translate_marker( "Ring" ), def_c_ltgreen, material_id( "silver" ),   0_ml,  4_gram,  0,  0,  0,  0,  0,  0_ml,  0,  0,  0,
+        translate_marker( "Ring" ), def_c_light_green, material_id( "silver" ),   0_ml,  4_gram,  0,  0,  0,  0,  0,  0_ml,  0,  0,  0,
         0, true,
         {{ARMORMOD_NULL, ARMORMOD_NULL, ARMORMOD_NULL, ARMORMOD_NULL, ARMORMOD_NULL}}
     }
@@ -1053,7 +1054,7 @@ void it_artifact_tool::deserialize(JsonObject &jo)
     } else {
         sym = jo.get_string( "sym" );
     }
-    color = jo.get_int("color");
+    jo.read( "color", color );
     price = jo.get_int("price");
     // LEGACY: Since it seems artifacts get serialized out to disk, and they're
     // dynamic, we need to allow for them to be read from disk for, oh, I guess
@@ -1116,7 +1117,7 @@ void it_artifact_armor::deserialize(JsonObject &jo)
     } else {
         sym = jo.get_string( "sym" );
     }
-    color = jo.get_int("color");
+    jo.read( "color", color );
     price = jo.get_int("price");
     // LEGACY: Since it seems artifacts get serialized out to disk, and they're
     // dynamic, we need to allow for them to be read from disk for, oh, I guess
@@ -1163,7 +1164,8 @@ bool save_artifacts( const std::string &path )
     return write_to_file_exclusive( path, [&]( std::ostream &fout ) {
         JsonOut json( fout );
         json.start_array();
-        for( const itype *e : item_controller->all() ) {
+        // We only want runtime types, otherwise static artifacts are loaded twice (on init and then on game load)
+        for( const itype *e : item_controller->get_runtime_types() ) {
             if( !e->artifact ) {
                 continue;
             }

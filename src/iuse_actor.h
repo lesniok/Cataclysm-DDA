@@ -6,12 +6,18 @@
 #include "game_constants.h"
 #include "color.h"
 #include "bodypart.h"
+#include "ret_val.h"
 #include "string_id.h"
 #include "explosion.h"
-#include "vitamin.h"
 #include "units.h"
 #include <limits.h>
+#include <set>
+#include <map>
+#include <string>
+#include <vector>
 
+class vitamin;
+using vitamin_id = string_id<vitamin>;
 struct vehicle_prototype;
 using vproto_id = string_id<vehicle_prototype>;
 enum field_id : int;
@@ -278,8 +284,8 @@ class place_monster_iuse : public iuse_actor
         /** Shown when programming the monster failed and it's hostile. Can be empty. */
         std::string hostile_msg;
         /** Skills used to make the monster not hostile when activated. **/
-        skill_id skill1 = skill_id( "none" );
-        skill_id skill2 = skill_id( "none" );
+        skill_id skill1 = skill_id::NULL_ID();
+        skill_id skill2 = skill_id::NULL_ID();
 
         place_monster_iuse() : iuse_actor( "place_monster" ) { }
         ~place_monster_iuse() override;
@@ -597,9 +603,13 @@ class musical_instrument_actor : public iuse_actor
          */
         int fun_bonus;
         /**
-         * List of sound descriptions
-         */
-        std::vector< std::string > descriptions;
+        * List of sound descriptions for players
+        */
+        std::vector< std::string > player_descriptions;
+        /**
+        * List of sound descriptions for NPCs
+        */
+        std::vector< std::string > npc_descriptions;
         /**
          * Display description once per this many turns
          */
@@ -883,6 +893,18 @@ class emit_actor : public iuse_actor
         long use( player &, item &, bool, const tripoint & ) const override;
         iuse_actor *clone() const override;
         void finalize( const itype_id &my_item_type ) override;
+};
+
+class saw_barrel_actor : public iuse_actor
+{
+    public:
+        saw_barrel_actor( const std::string &type = "saw_barrel" ) : iuse_actor( type ) {}
+
+        void load( JsonObject &jo ) override;
+        long use( player &p, item &it, bool t, const tripoint &pnt ) const override;
+        iuse_actor *clone() const override;
+
+        ret_val<bool> can_use_on( const player &p, const item &it, const item &target ) const;
 };
 
 #endif
