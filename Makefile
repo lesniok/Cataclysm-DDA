@@ -1,3 +1,5 @@
+# make -j 4 NATIVE=linux64 RELEASE=1 CCACHE=1 TILES=1 SOUND=1 LOCALIZE=0 LUA=1 DYNAMIC_LINKING=1
+
 # vim: set expandtab tabstop=4 softtabstop=2 shiftwidth=2:
 # Platforms:
 # Linux/Cygwin native
